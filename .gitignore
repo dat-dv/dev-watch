@@ -1,0 +1,17 @@
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Built App Bundles (Generated via ./build_mac_app.sh)
+DevWatch.app/
+AgentWatch.app/
+
+# Temporary & Log Files
+*.proc
+*.sess
+*.ports
+*.ps
+*.cwds
+*.tmp
+*.log
