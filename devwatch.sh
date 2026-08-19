@@ -70,8 +70,8 @@ scan_and_render() {
   # 3. Find candidate dev process PIDs for batch CWD query
   dev_pids="$(awk '
     function is_dev(cmd) {
-      if (cmd ~ /(\/System\/|\/usr\/libexec\/|\/Applications\/.*Helper|tsserver\.js|eslintServer\.js|language-features)/) return 0;
-      if (cmd ~ /(npm run |npm start|npx |pnpm |yarn |bun |next dev|next start|vite|tsx |tsx watch|ts-node|tsc --watch|tsc -w|nodemon|concurrently|turbo dev|webpack serve|nest start|react-scripts start|esbuild )/) return 1;
+      if (cmd ~ /(\/System\/|\/usr\/libexec\/|\/Applications\/.*Helper|tsserver\.js|eslintServer\.js|language-features|copilot|tabnine|prettier|chrome-devtools-mcp|mcp-remote|modelcontextprotocol)/) return 0;
+      if (cmd ~ /(npm run|npm start|pnpm dev|pnpm start|pnpm run|yarn dev|yarn start|yarn run|bun dev|bun run|bun start|next dev|next start|next-server|vite|nuxt|nitro|astro|remix|gatsby|svelte-kit|ng serve|webpack|turbo dev|turbopack|nodemon|concurrently|tsx|ts-node|tsc -w|tsc --watch|nest start|react-scripts start|esbuild|python.*manage\.py|uvicorn|flask run|fastapi|cargo watch|cargo run|go run|air|rails s|rails server|puma|php artisan serve)/) return 1;
       return 0;
     }
     {
@@ -97,8 +97,8 @@ scan_and_render() {
       -v red="$RED" -v flash_red="$FLASH_RED" -v green="$GREEN" -v cyan="$CYAN" \
       -v bold="$BOLD" -v dim="$DIM" -v reset="$RESET" '
     function is_dev(cmd) {
-      if (cmd ~ /(\/System\/|\/usr\/libexec\/|\/Applications\/.*Helper|tsserver\.js|eslintServer\.js|language-features)/) return 0;
-      if (cmd ~ /(npm run |npm start|npx |pnpm |yarn |bun |next dev|next start|vite|tsx |tsx watch|ts-node|tsc --watch|tsc -w|nodemon|concurrently|turbo dev|webpack serve|nest start|react-scripts start|esbuild )/) return 1;
+      if (cmd ~ /(\/System\/|\/usr\/libexec\/|\/Applications\/.*Helper|tsserver\.js|eslintServer\.js|language-features|copilot|tabnine|prettier|chrome-devtools-mcp|mcp-remote|modelcontextprotocol)/) return 0;
+      if (cmd ~ /(npm run|npm start|pnpm dev|pnpm start|pnpm run|yarn dev|yarn start|yarn run|bun dev|bun run|bun start|next dev|next start|next-server|vite|nuxt|nitro|astro|remix|gatsby|svelte-kit|ng serve|webpack|turbo dev|turbopack|nodemon|concurrently|tsx|ts-node|tsc -w|tsc --watch|nest start|react-scripts start|esbuild|python.*manage\.py|uvicorn|flask run|fastapi|cargo watch|cargo run|go run|air|rails s|rails server|puma|php artisan serve)/) return 1;
       return 0;
     }
 
@@ -139,13 +139,7 @@ scan_and_render() {
         name = substr($0, 2);
         if (match(name, /:[0-9]+$/)) {
           port = substr(name, RSTART+1);
-          g = pid_pgid[curr_port_pid];
-          if (g != "") {
-            if (!(g SUBSEP port in port_seen)) {
-              port_seen[g SUBSEP port] = 1;
-              ports_map[g] = ports_map[g] (ports_map[g] ? "," : "") port;
-            }
-          }
+          pid_ports[curr_port_pid] = pid_ports[curr_port_pid] (pid_ports[curr_port_pid] ? "," : "") port;
         }
       }
       next;
@@ -163,16 +157,91 @@ scan_and_render() {
     }
 
     END {
+      # 1. Identify Dev Session Root PIDs (top-most dev process in process tree)
+      dev_root_cnt = 0;
       for (i = 1; i <= p_cnt; i++) {
         pid = all_pids[i];
-        cmd = pid_cmd[pid];
-        if (!is_dev(cmd)) continue;
+        if (is_dev(pid_cmd[pid])) {
+          curr = pid_ppid[pid];
+          has_dev_ancestor = 0;
+          depth = 0;
+          while (curr > 1 && (curr in pid_ppid) && depth++ < 30) {
+            if (is_dev(pid_cmd[curr])) {
+              has_dev_ancestor = 1;
+              break;
+            }
+            curr = pid_ppid[curr];
+          }
+          if (!has_dev_ancestor) {
+            is_root_dev[pid] = 1;
+            dev_roots[++dev_root_cnt] = pid;
+          }
+        }
+      }
 
-        cwd = pid_cwd[pid];
-        if (cwd == "" || cwd ~ /^(\/System\/|\/usr\/|\/Library\/|\/Applications\/|\/private\/var\/)/) continue;
+      # 2. Map EVERY process to its Dev Session Root
+      for (i = 1; i <= p_cnt; i++) {
+        pid = all_pids[i];
 
-        # Origin lookup in memory
-        curr = pid;
+        if (pid in is_root_dev) {
+          root_of_pid[pid] = pid;
+          continue;
+        }
+
+        matched_root = "";
+        curr = pid_ppid[pid];
+        depth = 0;
+        while (curr > 1 && (curr in pid_ppid) && depth++ < 30) {
+          if (curr in is_root_dev) {
+            matched_root = curr;
+          }
+          curr = pid_ppid[curr];
+        }
+
+        # Fallback: PGID matching for detached/reparented child processes
+        if (matched_root == "") {
+          pgid = pid_pgid[pid];
+          for (r = 1; r <= dev_root_cnt; r++) {
+            root_pid = dev_roots[r];
+            if (pid_pgid[root_pid] == pgid && pid != root_pid) {
+              is_ancestor = 0;
+              c = pid_ppid[root_pid];
+              d = 0;
+              while (c > 1 && (c in pid_ppid) && d++ < 30) {
+                if (c == pid) { is_ancestor = 1; break; }
+                c = pid_ppid[c];
+              }
+              if (!is_ancestor) {
+                matched_root = root_pid;
+                break;
+              }
+            }
+          }
+        }
+
+        if (matched_root != "") {
+          root_of_pid[pid] = matched_root;
+        }
+      }
+
+      # 3. Create session entries for Dev Session Roots
+      sess_n = 0;
+      for (r = 1; r <= dev_root_cnt; r++) {
+        root_pid = dev_roots[r];
+
+        cwd = pid_cwd[root_pid];
+        if (cwd == "") {
+          for (p in root_of_pid) {
+            if (root_of_pid[p] == root_pid && pid_cwd[p] != "") {
+              cwd = pid_cwd[p];
+              break;
+            }
+          }
+        }
+
+        if (cwd == "" || cwd == "/" || cwd ~ /^(\/System\/|\/usr\/|\/Library\/|\/Applications\/|\/private\/var\/)/) continue;
+
+        curr = root_pid;
         depth = 0;
         origin = "Other";
         while (curr > 1 && (curr in pid_ppid) && depth++ < 20) {
@@ -184,7 +253,7 @@ scan_and_render() {
           curr = pid_ppid[curr];
         }
 
-        pgid = pid_pgid[pid];
+        pgid = pid_pgid[root_pid];
         key = cwd SUBSEP pgid;
 
         if (!(key in sess_seen)) {
@@ -192,24 +261,46 @@ scan_and_render() {
           sess_order[++sess_n] = key;
           sess_cwd[key] = cwd;
           sess_pgid[key] = pgid;
-          sess_pid[key] = pid;
-          sess_age[key] = pid_etime[pid];
+          sess_pid[key] = root_pid;
+          sess_age[key] = pid_etime[root_pid];
           sess_origin[key] = origin;
-          sess_cmd[key] = cmd;
-        } else {
-          if (pid == pgid) {
-            sess_pid[key] = pid;
-            sess_age[key] = pid_etime[pid];
-            sess_origin[key] = origin;
-            sess_cmd[key] = cmd;
-          }
+          sess_cmd[key] = pid_cmd[root_pid];
         }
-
-        sess_cpu[key] += pid_cpu[pid];
-        sess_rss[key] += pid_rss[pid];
 
         project_seen[cwd] = 1;
         project_sess_count[cwd SUBSEP pgid] = 1;
+      }
+
+      # 4. Sum CPU, RSS, and ports for ALL mapped processes under each dev session
+      for (i = 1; i <= p_cnt; i++) {
+        pid = all_pids[i];
+        if (pid in root_of_pid) {
+          root_pid = root_of_pid[pid];
+          cwd = pid_cwd[root_pid];
+          if (cwd == "") {
+            for (p in root_of_pid) {
+              if (root_of_pid[p] == root_pid && pid_cwd[p] != "") { cwd = pid_cwd[p]; break; }
+            }
+          }
+          if (cwd == "" || cwd ~ /^(\/System\/|\/usr\/|\/Library\/|\/Applications\/|\/private\/var\/)/) continue;
+
+          pgid = pid_pgid[root_pid];
+          key = cwd SUBSEP pgid;
+
+          sess_cpu[key] += pid_cpu[pid];
+          sess_rss[key] += pid_rss[pid];
+
+          if (pid in pid_ports) {
+            split(pid_ports[pid], ports_arr, ",");
+            for (pa in ports_arr) {
+              port = ports_arr[pa];
+              if (!(key SUBSEP port in port_seen)) {
+                port_seen[key SUBSEP port] = 1;
+                ports_map[key] = ports_map[key] (ports_map[key] ? "," : "") port;
+              }
+            }
+          }
+        }
       }
 
       if (sess_n == 0) {
@@ -253,7 +344,7 @@ scan_and_render() {
         dup_cnt = project_count[cwd];
 
         p_name = basename(cwd);
-        ports = ports_map[pgid];
+        ports = ports_map[key];
         if (ports == "") ports = "-";
 
         if (dup_cnt > 1) {
