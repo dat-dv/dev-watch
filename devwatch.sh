@@ -34,11 +34,12 @@ TMP_BASE="${TMPDIR:-/tmp}/devwatch.$$"
 PS_FILE="${TMP_BASE}.ps"
 PORTS_FILE="${TMP_BASE}.ports"
 CWDS_FILE="${TMP_BASE}.cwds"
+SESS_FILE="${TMP_BASE}.sess"
 
 SAVED_STTY="$(stty -g 2>/dev/null || true)"
 
 cleanup() {
-  rm -f "$PS_FILE" "$PORTS_FILE" "$CWDS_FILE"
+  rm -f "$PS_FILE" "$PORTS_FILE" "$CWDS_FILE" "$SESS_FILE"
   # Restore terminal title & stty
   printf "\033]0;Terminal\007" 2>/dev/null || true
   if [ -n "${SAVED_STTY:-}" ]; then
@@ -60,6 +61,7 @@ scan_and_render() {
   : > "$PS_FILE"
   : > "$PORTS_FILE"
   : > "$CWDS_FILE"
+  : > "$SESS_FILE"
 
   # 1. Capture process snapshot
   ps -axo pid=,ppid=,pgid=,%cpu=,rss=,etime=,command= > "$PS_FILE"
@@ -91,9 +93,9 @@ scan_and_render() {
 
   clear
   self_stats="$(get_self_usage)"
-  printf "${BOLD}DevWatch 🛡️${RESET}  ${DIM}refresh ${INTERVAL}s · [r] refresh · [q] quit · watcher: %s${RESET}\n\n" "$self_stats"
+  printf "${BOLD}DevWatch 🛡️${RESET}  ${DIM}refresh ${INTERVAL}s · [r] refresh · [k] kill · [q] quit · watcher: %s${RESET}\n\n" "$self_stats"
 
-  awk -v home="$HOME" -v self_stats="$self_stats" \
+  awk -v home="$HOME" -v self_stats="$self_stats" -v sess_file="$SESS_FILE" \
       -v red="$RED" -v flash_red="$FLASH_RED" -v green="$GREEN" -v cyan="$CYAN" \
       -v bold="$BOLD" -v dim="$DIM" -v reset="$RESET" '
     function is_dev(cmd) {
@@ -328,8 +330,8 @@ scan_and_render() {
         printf "\033]0;✓ DevWatch (Clean)\007";
       }
 
-      printf "%s%-24s %-12s %-8s %-8s %-8s %-10s %-10s %-12s %s%s\n", \
-        bold, "PROJECT", "ORIGIN", "PGID", "PID", "CPU", "MEM", "AGE", "PORT", "COMMAND", reset;
+      printf "%s%-4s %-22s %-12s %-8s %-8s %-8s %-10s %-10s %-12s %s%s\n", \
+        bold, "#", "PROJECT", "ORIGIN", "PGID", "PID", "CPU", "MEM", "AGE", "PORT", "COMMAND", reset;
 
       total_rss = 0;
 
@@ -364,10 +366,14 @@ scan_and_render() {
 
         cpu_str = sprintf("%.1f%%", sess_cpu[key]);
 
-        printf "%s %-22s %-12s %-8s %-8s %-8s %-10s %-10s %-12s %.80s%s\n", \
-          prefix, p_name, origin, pgid, pid, cpu_str, mem_str, age, ports, cmd, suffix;
+        idx_str = sprintf("%d", i);
+        printf "%s %-2s %-22s %-12s %-8s %-8s %-8s %-10s %-10s %-12s %.80s%s\n", \
+          prefix, idx_str, p_name, origin, pgid, pid, cpu_str, mem_str, age, ports, cmd, suffix;
 
-        printf "  %s%s%s\n", dim, shorten_path(cwd), reset;
+        printf "     %s%s%s\n", dim, shorten_path(cwd), reset;
+
+        # Record session mapping for interactive kill
+        printf "%d\t%s\t%s\t%s\n", i, pgid, pid, p_name >> sess_file;
       }
 
       printf "\n";
@@ -383,9 +389,10 @@ scan_and_render() {
 
       if (dup_projects > 0) {
         printf "%s%s⚠ %d project(s) have multiple dev sessions.%s\n", flash_red, bold, dup_projects, reset;
-        printf "%sKill a whole session safely with: kill -- -PGID%s\n", dim, reset;
+        printf "%sPress [k] to kill a session interactively, or: kill -- -PGID%s\n", dim, reset;
       } else {
         printf "%s✓ No duplicate dev sessions.%s\n", green, reset;
+        printf "%sPress [k] to kill a session interactively.%s\n", dim, reset;
       }
     }
   ' "$PS_FILE" "$PORTS_FILE" "$CWDS_FILE"
@@ -402,6 +409,77 @@ while true; do
   case "$key" in
     q|Q)
       exit 0
+      ;;
+    r|R)
+      continue
+      ;;
+    k|K)
+      stty "$SAVED_STTY" 2>/dev/null || true
+      printf "\n${BOLD}${CYAN}🔪 KILL SESSION${RESET}\n"
+      if [ ! -s "$SESS_FILE" ]; then
+        printf "${YELLOW}No active dev sessions found to kill.${RESET}\n"
+        sleep 1.5
+        continue
+      fi
+
+      printf "${DIM}Enter session # (1..N), PID, or PGID to kill (or press Enter/c to cancel):${RESET} "
+      read -r target_input
+
+      if [ -z "$target_input" ] || [ "$target_input" = "c" ] || [ "$target_input" = "C" ]; then
+        printf "${DIM}Cancelled.${RESET}\n"
+        sleep 0.5
+        continue
+      fi
+
+      target_pgid=""
+      target_pid=""
+      target_name=""
+
+      # Check if input matches session index (1..N)
+      if [[ "$target_input" =~ ^[0-9]+$ ]]; then
+        sess_info="$(awk -v idx="$target_input" '$1 == idx { print $2 "\t" $3 "\t" $4 }' "$SESS_FILE")"
+        if [ -n "$sess_info" ]; then
+          target_pgid="$(echo "$sess_info" | cut -f1)"
+          target_pid="$(echo "$sess_info" | cut -f2)"
+          target_name="$(echo "$sess_info" | cut -f3-)"
+        fi
+      fi
+
+      # If not matched by index, check if user provided PGID or PID directly
+      if [ -z "$target_pgid" ]; then
+        clean_num="${target_input#-}"
+        if [[ "$clean_num" =~ ^[0-9]+$ ]]; then
+          sess_info="$(awk -v num="$clean_num" '$2 == num || $3 == num { print $2 "\t" $3 "\t" $4; exit }' "$SESS_FILE")"
+          if [ -n "$sess_info" ]; then
+            target_pgid="$(echo "$sess_info" | cut -f1)"
+            target_pid="$(echo "$sess_info" | cut -f2)"
+            target_name="$(echo "$sess_info" | cut -f3-)"
+          else
+            target_pgid="$clean_num"
+            target_pid="$clean_num"
+            target_name="PID/PGID $clean_num"
+          fi
+        fi
+      fi
+
+      if [ -n "$target_pgid" ]; then
+        printf "${YELLOW}Terminating %s (PGID %s, PID %s)...${RESET}\n" "$target_name" "$target_pgid" "$target_pid"
+        
+        # 1. Attempt SIGTERM process group, then PID
+        kill -- -"$target_pgid" 2>/dev/null || kill "$target_pid" 2>/dev/null || true
+        sleep 0.5
+        
+        # 2. Check if process group or PID is still running, send SIGKILL if needed
+        if kill -0 "$target_pid" 2>/dev/null || kill -0 -- -"$target_pgid" 2>/dev/null; then
+          kill -9 -- -"$target_pgid" 2>/dev/null || kill -9 "$target_pid" 2>/dev/null || true
+        fi
+        
+        printf "${GREEN}✓ Terminated session %s (PGID %s).${RESET}\n" "$target_name" "$target_pgid"
+        sleep 1
+      else
+        printf "${RED}Invalid session #, PID, or PGID: %s${RESET}\n" "$target_input"
+        sleep 1.5
+      fi
       ;;
   esac
 done
