@@ -62,15 +62,17 @@ devwatch 10
 
 ## ⌨️ Phím tắt điều khiển
 
-- **`q`**: Thoát DevWatch.
+- **`k`**: Mở chế độ diệt tiến trình (Kill Session) trực tiếp theo số thứ tự `#` (1, 2,...), PID, hoặc PGID.
 - **`r`**: Bắt buộc quét & làm mới giao diện ngay lập tức.
+- **`q`**: Thoát DevWatch.
 - **`Ctrl + C`**: Dừng chương trình.
 
 ---
 
 ## 🧹 Cách tắt an toàn một Session bị trùng
 
-Để diệt triệt để một session trùng lặp cùng toàn bộ các tiến trình con của nó:
+1. **Thao tác trực tiếp trong DevWatch**: Nhấn phím `k`, nhập số thứ tự session (ví dụ `1`) hoặc nhập `PGID`/`PID` và nhấn `Enter`. DevWatch sẽ tự động diệt triệt để nhóm tiến trình (PGID).
+2. **Thao tác thủ công qua Terminal**:
 
 ```bash
 kill -- -PGID

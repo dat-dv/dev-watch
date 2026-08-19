@@ -15,7 +15,9 @@ echo "⚡ Installing DevWatch..."
 mkdir -p "$INSTALL_DIR"
 
 if [ -f "devwatch.sh" ]; then
-  cp "devwatch.sh" "$BIN_PATH"
+  if [ "$(realpath "$BIN_PATH" 2>/dev/null || true)" != "$(realpath "devwatch.sh" 2>/dev/null || true)" ]; then
+    cp -f "devwatch.sh" "$BIN_PATH"
+  fi
 else
   curl -fsSL "$RAW_URL" -o "$BIN_PATH"
 fi
