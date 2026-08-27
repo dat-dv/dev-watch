@@ -284,7 +284,7 @@ scan_and_render() {
         is_runaway = 0;
         runaway_reason = "";
 
-        if (cmd ~ /(^|[\/ ])(zsh|bash|sh|fish)($| )/ && cmd !~ /devwatch/) {
+        if (cmd ~ /(^[-]?|[\/ ])(zsh|bash|sh|fish)($|[ \t])/ && cmd !~ /devwatch/) {
           if ((cpu + 0) >= 20.0) {
             is_runaway = 1;
             runaway_reason = sprintf("🔥 Runaway CPU Shell (%.1f%%)", cpu + 0);
@@ -295,6 +295,9 @@ scan_and_render() {
               runaway_reason = "👻 Orphan Shell (No Owner)";
             }
           }
+        } else if ((cpu + 0) >= 20.0 && !is_dev_server(cmd) && cmd !~ /devwatch/) {
+          is_runaway = 1;
+          runaway_reason = sprintf("🔥 Runaway CPU Process (%.1f%%)", cpu + 0);
         } else if (cmd ~ /node_repl/) {
           is_runaway = 1;
           runaway_reason = "📦 Dangling Node REPL";
