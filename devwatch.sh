@@ -432,15 +432,43 @@ scan_and_render() {
         if (cnt > 1) dup_dev_projects++;
       }
 
-      # Count active MCP types
+      # Count active MCP types and detect duplicate instances
       for (m = 1; m <= active_mcp_cnt; m++) {
         pid = active_mcps[m];
         cname = get_mcp_clean_name(pid_cmd[pid]);
         mcp_type_count[cname]++;
+        mcp_type_pids[cname] = mcp_type_pids[cname] (mcp_type_pids[cname] ? "," : "") pid;
       }
+
       dup_mcp_count = 0;
       for (cn in mcp_type_count) {
-        if (mcp_type_count[cn] > 1) dup_mcp_count += (mcp_type_count[cn] - 1);
+        if (mcp_type_count[cn] > 1) {
+          split(mcp_type_pids[cn], p_list, ",");
+          # Find the newest PIDs for this tool category (newest npm / newest node / newest binary)
+          newest_npm = 0; newest_node = 0; newest_bin = 0;
+          for (k = 1; k <= length(p_list); k++) {
+            p = p_list[k];
+            c = pid_cmd[p];
+            if (c ~ /^npm/ || c ~ /npm exec/) { if (p > newest_npm) newest_npm = p; }
+            else if (c ~ /^node / || c ~ /\/node /) { if (p > newest_node) newest_node = p; }
+            else { if (p > newest_bin) newest_bin = p; }
+          }
+
+          # Flag all older instances as redundant duplicates
+          for (k = 1; k <= length(p_list); k++) {
+            p = p_list[k];
+            c = pid_cmd[p];
+            is_dup = 0;
+            if (c ~ /^npm/ || c ~ /npm exec/) { if (p != newest_npm && newest_npm > 0) is_dup = 1; }
+            else if (c ~ /^node / || c ~ /\/node /) { if (p != newest_node && newest_node > 0) is_dup = 1; }
+            else { if (p != newest_bin && newest_bin > 0) is_dup = 1; }
+
+            if (is_dup) {
+              is_duplicate_mcp[p] = 1;
+              dup_mcp_count++;
+            }
+          }
+        }
       }
 
       # Totals
@@ -569,8 +597,15 @@ scan_and_render() {
 
           cpu_str = sprintf("%.1f%%", cpu_val);
 
-          prefix = green "✓";
-          suffix = (mcp_type_count[cname] > 1) ? ("  " yellow sprintf("(x%d instances)", mcp_type_count[cname]) reset) : reset;
+          if (is_duplicate_mcp[pid]) {
+            prefix = yellow "⚠";
+            suffix = "  " yellow sprintf("(x%d - Redundant Duplicate)", mcp_type_count[cname]) reset;
+            # Record duplicate in zombie_file for 1-click Quick Clean
+            printf "%s\t%s\t%s\n", pid, ("⚠ Redundant Duplicate (" cname ")"), cmd >> zombie_file;
+          } else {
+            prefix = green "✓";
+            suffix = (mcp_type_count[cname] > 1) ? ("  " green "(Active Primary)" reset) : reset;
+          }
 
           item_idx = ++total_inventory_items;
 
@@ -603,9 +638,9 @@ scan_and_render() {
       }
 
       # Bottom Action Prompts
-      if (runaway_cnt > 0) {
-        printf "%s%s⚠ Found %d Orphan/Runaway process(es).%s %sPress [c] to Quick-Clean, [k] to terminate, [q] to quit.%s\n", \
-          flash_red, bold, runaway_cnt, reset, dim, reset;
+      if (runaway_cnt > 0 || dup_mcp_count > 0) {
+        printf "%s%s⚠ Found %d Orphan/Runaway & %d Redundant Duplicate MCP(s).%s %sPress [c] to Quick-Clean, [k] to terminate, [q] to quit.%s\n", \
+          flash_red, bold, runaway_cnt, dup_mcp_count, reset, dim, reset;
       } else if (dup_dev_projects > 0) {
         printf "%s%s⚠ %d project(s) have duplicate dev sessions.%s %sPress [k] to terminate duplicate, [q] to quit.%s\n", \
           flash_red, bold, dup_dev_projects, reset, dim, reset;
@@ -634,20 +669,20 @@ while true; do
       ;;
     c|C)
       stty "$SAVED_STTY" 2>/dev/null || true
-      printf "\n${BOLD}${FLASH_RED}🧹 QUICK-CLEAN ORPHAN & RUNAWAY PROCESSES${RESET}\n"
+      printf "\n${BOLD}${FLASH_RED}🧹 QUICK-CLEAN ORPHAN & REDUNDANT DUPLICATE PROCESSES${RESET}\n"
       if [ ! -s "$ZOMBIE_FILE" ]; then
-        printf "${GREEN}✓ No orphaned MCPs or runaway CPU shells found to clean.${RESET}\n"
+        printf "${GREEN}✓ No orphaned processes or duplicate MCP instances found to clean.${RESET}\n"
         sleep 1.5
         continue
       fi
 
       z_cnt="$(wc -l < "$ZOMBIE_FILE" | tr -d ' ')"
-      printf "${YELLOW}Found %s verified orphan/runaway candidate(s) to clean:${RESET}\n" "$z_cnt"
+      printf "${YELLOW}Found %s verified candidate(s) to clean:${RESET}\n" "$z_cnt"
       while IFS=$'\t' read -r z_pid z_reason z_cmd; do
-        printf "  ${RED}• PID %-6s${RESET} ${DIM}[%-24s]${RESET} %.50s\n" "$z_pid" "$z_reason" "$z_cmd"
+        printf "  ${RED}• PID %-6s${RESET} ${DIM}[%-32s]${RESET} %.50s\n" "$z_pid" "$z_reason" "$z_cmd"
       done < "$ZOMBIE_FILE"
 
-      printf "\n${BOLD}Terminate these %s verified orphan process(es)? (y/N):${RESET} " "$z_cnt"
+      printf "\n${BOLD}Terminate these %s candidate(s) (leaving primary active instances alive)? (y/N):${RESET} " "$z_cnt"
       read -r confirm_clean
 
       if [ "$confirm_clean" = "y" ] || [ "$confirm_clean" = "Y" ]; then
