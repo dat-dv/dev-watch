@@ -14,7 +14,8 @@ echo "⚡ Installing DevWatch..."
 
 mkdir -p "$INSTALL_DIR"
 
-if [ -f "devwatch.sh" ]; then
+# Verify if running from within valid dev-watch repo or download from official remote
+if [ -f "devwatch.sh" ] && [ -f "build_mac_app.sh" ] && [ -d ".git" ]; then
   if [ "$(realpath "$BIN_PATH" 2>/dev/null || true)" != "$(realpath "devwatch.sh" 2>/dev/null || true)" ]; then
     cp -f "devwatch.sh" "$BIN_PATH"
   fi
