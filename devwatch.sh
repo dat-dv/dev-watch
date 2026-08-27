@@ -603,14 +603,14 @@ scan_and_render() {
 
       # Bottom Action Prompts
       if (runaway_cnt > 0) {
-        printf "%s%s⚠ Found %d Orphan/Runaway process(es). Press %s[c]%s %sto Quick-Clean, or %s[k]%s %sto manage by #/PID.%s\n", \
-          flash_red, bold, runaway_cnt, bold, flash_red, bold, flash_red, reset;
+        printf "%s%s⚠ Found %d Orphan/Runaway process(es).%s %sPress [c] to Quick-Clean, [k] to terminate, [q] to quit.%s\n", \
+          flash_red, bold, runaway_cnt, reset, dim, reset;
       } else if (dup_dev_projects > 0) {
-        printf "%s%s⚠ %d project(s) have duplicate dev sessions. Press %s[k]%s %sto terminate duplicate sessions.%s\n", \
-          flash_red, bold, dup_dev_projects, bold, flash_red, reset;
+        printf "%s%s⚠ %d project(s) have duplicate dev sessions.%s %sPress [k] to terminate duplicate, [q] to quit.%s\n", \
+          flash_red, bold, dup_dev_projects, reset, dim, reset;
       } else {
-        printf "%s🛡️ System protected. Press %s[k]%s %sto terminate a managed process, %s[r]%s %sto refresh, %s[q]%s %sto quit.%s\n", \
-          green, bold, green, bold, green, bold, green, reset;
+        printf "%s🛡️ System protected.%s %sPress [k] to terminate, [r] to refresh, [q] to quit.%s\n", \
+          green, reset, dim, reset;
       }
     }
   ' "$PS_FILE" "$PORTS_FILE" "$CWDS_FILE"
