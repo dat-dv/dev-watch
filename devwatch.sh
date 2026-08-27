@@ -187,6 +187,7 @@ scan_and_render() {
     # File 1: PS_FILE
     FILENAME ~ /\.ps$/ {
       pid = $1; ppid = $2; pgid = $3; cpu = $4; rss = $5; etime = $6;
+      gsub(/,/, ".", cpu);
       $1=$2=$3=$4=$5=$6="";
       sub(/^[ \t]+/, "");
       cmd = redact_secrets($0);
@@ -284,9 +285,9 @@ scan_and_render() {
         runaway_reason = "";
 
         if (cmd ~ /(^|[\/ ])(zsh|bash|sh|fish)($| )/ && cmd !~ /devwatch/) {
-          if (cpu >= 25.0) {
+          if ((cpu + 0) >= 20.0) {
             is_runaway = 1;
-            runaway_reason = sprintf("🔥 Runaway CPU Shell (%.1f%%)", cpu);
+            runaway_reason = sprintf("🔥 Runaway CPU Shell (%.1f%%)", cpu + 0);
           } else if (pid_is_orphan[pid]) {
             split(pid_etime[pid], t_parts, ":");
             if (length(t_parts) >= 3 || index(pid_etime[pid], "-") > 0) {
@@ -294,6 +295,9 @@ scan_and_render() {
               runaway_reason = "👻 Orphan Shell (No Owner)";
             }
           }
+        } else if (cmd ~ /node_repl/) {
+          is_runaway = 1;
+          runaway_reason = "📦 Dangling Node REPL";
         } else if (is_mcp_server(cmd) && pid_is_orphan[pid]) {
           # Orphaned MCP server whose parent IDE/Agent crashed or died
           is_runaway = 1;
@@ -304,9 +308,6 @@ scan_and_render() {
             is_runaway = 1;
             runaway_reason = "⏳ Stalled Git/SSH";
           }
-        } else if (cmd ~ /node_repl/ && pid_is_orphan[pid]) {
-          is_runaway = 1;
-          runaway_reason = "📦 Dangling Node REPL";
         }
 
         if (is_runaway) {
